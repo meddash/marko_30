@@ -2,16 +2,16 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#ef1017">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#e8191c">
   <meta name="description" content="Maria turns 30. Beautifully bizarre. Sat, Dec 05 · 19:00. NOMER.">
   <title>Maria turns 30 — beautifully bizarre</title>
   <style>
     * { box-sizing: border-box; }
-    html, body { margin: 0; min-height: 100%; }
-    body { background: #ef1017; color: #080000; font-family: Helvetica, Arial, sans-serif; }
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; overscroll-behavior: none; }
+    body { background: #e8191c; color: #080000; font-family: Helvetica, Arial, sans-serif; }
     main { min-height: 100svh; display: grid; place-items: center; overflow: hidden; }
-    .sphere { position: relative; width: min(99vw, 98svh, 1200px); aspect-ratio: 1; background: #ef1017; }
+    .page-lens { position: fixed; inset: 0; background: #e8191c; }
     canvas { display: block; width: 100%; height: 100%; position: absolute; inset: 0; }
     .invitation { position: absolute; inset: 21% 10%; display: flex; flex-direction: column; align-items: center; justify-content: space-between; text-align: center; }
     h1 { font-size: clamp(24px, 5vw, 64px); letter-spacing: -.045em; margin: 0; }
@@ -27,7 +27,7 @@
     canvas { touch-action: none; }
     [hidden] { display: none !important; }
     .tilt { position: fixed; left: 18px; bottom: 15px; border: 0; background: transparent; padding: 9px; font: 11px Helvetica, Arial, sans-serif; color: #380306; cursor: pointer; }
-    .tune { position: fixed; top: 12px; right: 12px; width: min(280px,calc(100vw - 24px)); max-height: calc(100svh - 70px); overflow: auto; padding: 18px; background: #ef1017; border: 1px solid #180000; font-size: 12px; }
+    .tune { position: fixed; top: 12px; right: 12px; width: min(280px,calc(100vw - 24px)); max-height: calc(100svh - 70px); overflow: auto; padding: 18px; background: #e8191c; border: 1px solid #180000; font-size: 12px; }
     .tune label { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-top: 16px; }
     .tune input { grid-column: 1 / -1; width: 100%; accent-color: #180000; }
     .tune p { margin-top: 16px; }
@@ -35,7 +35,7 @@
 </head>
 <body>
   <main>
-    <div class="sphere" aria-label="Animated red glass sphere">
+    <div class="page-lens" aria-label="Invitation with refraction along the page edges">
       <article class="invitation">
         <h1>maria turns 30</h1>
         <div><p class="theme">THEME OF THE NIGHT</p><h2>beautifully bizarre</h2></div>
@@ -51,14 +51,15 @@
   <script>
     (() => {
       'use strict';
-      // R = 1 in optical coordinates; radius controls its size on the screen.
+      // The unit optical sphere is mapped to the rectangular viewport; no sphere silhouette is drawn.
       const params = window.lensParams = {
         refraction: 1.25,
         edgeDistortion: 1,
         magnification: 1.9,
-        radius: .88,
+        radius: .97,
+        squareness: 6,
         softness: .008,
-        anisotropy: .025
+        anisotropy: .15
       };
       const canvas = document.querySelector('canvas');
       const button = document.querySelector('.motion');
@@ -75,8 +76,9 @@
         varying vec2 uv;
         uniform sampler2D lettering;
         uniform vec2 view;
-        uniform float ior, distortion, magnification, radius, softness, anisotropy, resolution;
-        const vec3 red = vec3(239.,16.,23.)/255.;
+        uniform vec2 viewport;
+        uniform float ior, distortion, magnification, radius, softness, anisotropy, squareness, resolution;
+        const vec3 red = vec3(232.,25.,28.)/255.;
         // One ray, two sphere intersections, two applications of Snell's law.
         bool trace(vec3 origin, vec3 ray, float n, float D, out vec2 hit) {
           float b = dot(origin,ray);
@@ -102,36 +104,46 @@
           if (st.x < 0. || st.x > 1. || st.y < 0. || st.y > 1.) return red;
           return value;
         }
-        vec3 channelRay(vec3 origin,vec3 ray,vec2 p,float n,float D) {
+        vec3 channelRay(vec3 origin,vec3 ray,vec2 p,float n,float D,float scale) {
           vec2 hit;
           if (!trace(origin,ray,n,D,hit)) return red;
-          vec2 ideal = p/magnification + D*ray.xy/(-ray.z);
-          // At distortion=1 and anisotropy=0 this is the exact spherical ray map.
-          float directional = 1.+anisotropy*(p.x*p.x-p.y*p.y)/(1.+dot(p,p));
+          vec2 centre;
+          if (!trace(vec3(0.,0.,1.)-ray*3.,ray,n,D,centre)) return red;
+          vec2 ideal = centre+p/magnification;
+          float angle = length(p) > .00001 ? atan(p.y,p.x)+view.x*.35 : 0.;
+          float directional = 1.+anisotropy*(.6*cos(2.*angle+.7)+.4*cos(3.*angle-1.2));
           hit = ideal+(hit-ideal)*distortion*directional;
-          // Compensate the paraxial enlargement; keep the original central type size.
-          return sheet(hit*magnification*1.28);
+          return sheet(hit*magnification*scale);
         }
         void main() {
-          vec2 p = (uv-view*.06*radius)/radius;
+          // Reference layout: real pixel coordinates, scaled by the short side.
+          vec2 halfPx = viewport*.5;
+          vec2 P = uv*halfPx;
+          float minA = min(halfPx.x,halfPx.y);
+          vec2 sn = abs(uv);
+          float sq = pow(pow(sn.x,squareness)+pow(sn.y,squareness),1./squareness);
+          float circular = length(P)/minA;
+          float u = mix(circular,sq,smoothstep(0.,1.,sq));
+          float rv = min(radius*u,radius+.012*smoothstep(1.,1.25,u));
+          rv = min(rv,.9995);
+          vec2 direction = length(P) > .00001 ? normalize(P) : vec2(0.);
+          vec2 p = direction*rv;
           vec3 ray = normalize(vec3(view*.12,-1.));
-          vec3 origin = vec3(p,0.)-ray*3.;
-          float b = dot(origin,ray);
-          float discriminant = b*b-dot(origin,origin)+1.;
-          if (discriminant <= 0.) { gl_FragColor=vec4(red,1.); return; }
-          // Ball-lens effective focal length from its centre: f=nR/(2(n-1)).
-          // Paraxial map is h_sheet=(1-D/f)*h_pixel, hence D=f*(1-1/M).
+          vec3 entry = vec3(p,sqrt(max(0.,1.-dot(p,p))));
+          vec3 origin = entry-ray*3.;
           float focal = ior/(2.*(ior-1.));
           float D = focal*(1.-1./magnification);
-          vec3 r = channelRay(origin,ray,p,ior*.995,D);
-          vec3 g = channelRay(origin,ray,p,ior,D);
-          vec3 bl = channelRay(origin,ray,p,ior*1.005,D);
+          // Reference: unit=.44*shortSide; texture UV=.5+pixel/unit*.7.
+          // sheet() uses .5+.5*point, hence the factor 1.4 here.
+          float unit = .44*min(viewport.x,viewport.y);
+          float scale = (minA/radius)/unit*1.4;
+          vec3 r = channelRay(origin,ray,p,ior*.995,D,scale);
+          vec3 g = channelRay(origin,ray,p,ior,D,scale);
+          vec3 bl = channelRay(origin,ray,p,ior*1.005,D,scale);
           vec3 color = vec3(r.r,g.g,bl.b);
-          float radial = sqrt(max(0.,1.-discriminant));
-          color *= 1.-.10*pow(radial,6.);
-          float feather = max(softness,2./(resolution*radius));
-          float coverage = 1.-smoothstep(1.-feather,1.,radial);
-          gl_FragColor = vec4(mix(red,color,coverage),1.);
+          // Fade compressed hairlines at the screen limits, as in the reference.
+          float fade = .9*smoothstep(.93,1.012+softness,u);
+          gl_FragColor = vec4(mix(color,red,fade),1.);
         }
       `;
       function compile(type,source) {
@@ -154,17 +166,18 @@
         const textureCanvas=document.createElement('canvas');
         textureCanvas.width=textureCanvas.height=1024;
         const ctx=textureCanvas.getContext('2d');
-        ctx.fillStyle='#ef1017'; ctx.fillRect(0,0,1024,1024);
+        ctx.fillStyle='#e8191c'; ctx.fillRect(0,0,1024,1024);
         ctx.fillStyle='#000'; ctx.textAlign='center'; ctx.textBaseline='middle';
-        function line(text,y,size,weight=700) {
+        function line(text,y,size,weight=700,spacing=0) {
           ctx.font=`${weight} ${size}px Helvetica, Arial, sans-serif`;
+          if ('letterSpacing' in ctx) ctx.letterSpacing=spacing+'px';
           ctx.fillText(text,512,y);
         }
-        line('maria turns 30',325,73);
-        line('THEME OF THE NIGHT',434,25.5);
-        line('beautifully bizarre',493,57);
-        line('sat, dec 05 · 19:00',609,42.5);
-        line('NOMER',692.5,52);
+        line('maria turns 30',270,118,700,-3);
+        line('THEME OF THE NIGHT',410,40,400,4);
+        line('beautifully bizarre',490,92,700,-2);
+        line('sat, dec 05 · 19:00',640,64,400,0);
+        line('NOMER',750,88,700,1);
         gl.bindTexture(gl.TEXTURE_2D,gl.createTexture());
         gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);
         gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,textureCanvas);
@@ -174,7 +187,7 @@
         gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
         gl.generateMipmap(gl.TEXTURE_2D);
         gl.uniform1i(gl.getUniformLocation(program,'lettering'),0);
-        const uniforms=Object.fromEntries(['view','ior','distortion','magnification','radius','softness','anisotropy','resolution'].map(k=>[k,gl.getUniformLocation(program,k)]));
+        const uniforms=Object.fromEntries(['viewport','view','ior','distortion','magnification','radius','softness','anisotropy','squareness','resolution'].map(k=>[k,gl.getUniformLocation(program,k)]));
         const reduced=matchMedia('(prefers-reduced-motion: reduce)');
         let paused=false,last=0,raf=0,idleTime=0,lastInput=performance.now();
         let target=[0,0],stage1=[0,0],stage2=[0,0];
@@ -183,12 +196,15 @@
           params.refraction=Math.max(1.05,Math.min(1.5,params.refraction));
           params.magnification=Math.max(params.refraction/(2-params.refraction)+.025,params.magnification);
           gl.uniform2f(uniforms.view,...stage2);
-          for (const [name,key] of [['ior','refraction'],['distortion','edgeDistortion'],['magnification','magnification'],['radius','radius'],['softness','softness'],['anisotropy','anisotropy']]) gl.uniform1f(uniforms[name],params[key]);
+          for (const [name,key] of [['ior','refraction'],['distortion','edgeDistortion'],['magnification','magnification'],['radius','radius'],['softness','softness'],['anisotropy','anisotropy'],['squareness','squareness']]) gl.uniform1f(uniforms[name],params[key]);
           gl.drawArrays(gl.TRIANGLES,0,6);
         }
         function resize() {
-          canvas.width=canvas.height=Math.round(canvas.clientWidth*Math.min(devicePixelRatio||1,2));
+          const dpr=Math.min(devicePixelRatio||1,2);
+          canvas.width=Math.round(canvas.clientWidth*dpr);
+          canvas.height=Math.round(canvas.clientHeight*dpr);
           gl.viewport(0,0,canvas.width,canvas.height);
+          gl.uniform2f(uniforms.viewport,canvas.width,canvas.height);
           gl.uniform1f(uniforms.resolution,canvas.width); draw();
         }
         function frame(now) {
@@ -254,7 +270,7 @@
         document.addEventListener('visibilitychange',()=>{last=0;wake();});
         if (new URLSearchParams(location.search).has('tune')) {
           const panel=document.querySelector('.tune'); panel.hidden=false;
-          const specs=[['refraction','Преломление',1.1,1.4,.001],['edgeDistortion','Искажение краёв',0,2,.01],['magnification','Увеличение',1.7,3.5,.01],['radius','Радиус',.5,.93,.01],['softness','Мягкость границы',.001,.05,.001],['anisotropy','Неравномерность',0,.15,.001]];
+          const specs=[['refraction','Преломление',1.1,1.4,.001],['edgeDistortion','Искажение краёв',0,2,.01],['magnification','Увеличение',1.7,3.5,.01],['radius','Глубина эффекта',.9,.985,.001],['squareness','Форма по краям',2,12,.1],['softness','Мягкость перехода',.001,.15,.001],['anisotropy','Неравномерность',0,.8,.01]];
           for (const [key,title,min,max,step] of specs) {
             const label=document.createElement('label');
             const heading=document.createElement('span'); heading.textContent=title;
@@ -276,13 +292,13 @@
         }
         canvas.addEventListener('webglcontextlost',event=>{
           event.preventDefault();paused=true;cancelAnimationFrame(raf);
-          document.querySelector('.sphere').classList.remove('rendered');canvas.hidden=true;
+          document.querySelector('.page-lens').classList.remove('rendered');canvas.hidden=true;
         });
         new ResizeObserver(resize).observe(canvas);
-        document.querySelector('.sphere').classList.add('rendered'); resize(); wake();
+        document.querySelector('.page-lens').classList.add('rendered'); resize(); wake();
       } catch(error) {
         console.error('Lens rendering unavailable:',error);
-        document.querySelector('.sphere').classList.remove('rendered');
+        document.querySelector('.page-lens').classList.remove('rendered');
         canvas.remove();button.remove();tiltButton.remove();
       }
     })();
