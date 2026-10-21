@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#ef1017">
+  <meta name="description" content="Maria turns 30. Beautifully bizarre. Sat, Dec 05 · 19:00. NOMER.">
+  <title>Maria turns 30 — beautifully bizarre</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body { background: #ef1017; color: #080000; font-family: Helvetica, Arial, sans-serif; }
+    main { min-height: 100svh; display: grid; place-items: center; overflow: hidden; }
+    .sphere { position: relative; width: min(99vw, 98svh, 1200px); aspect-ratio: 1; background: #ef1017; }
+    canvas { display: block; width: 100%; height: 100%; position: absolute; inset: 0; }
+    .invitation { position: absolute; inset: 21% 10%; display: flex; flex-direction: column; align-items: center; justify-content: space-between; text-align: center; }
+    h1 { font-size: clamp(24px, 5vw, 64px); letter-spacing: -.045em; margin: 0; }
+    p { margin: 0; }
+    .theme { font-size: clamp(10px, 2vw, 23px); }
+    h2 { font-size: clamp(19px, 3.8vw, 45px); letter-spacing: -.04em; margin: 10px 0 0; }
+    .date { font-size: clamp(15px, 3vw, 35px); }
+    .venue { font-size: clamp(22px, 4vw, 46px); }
+    .rendered .invitation { clip-path: inset(50%); width: 1px; height: 1px; overflow: hidden; }
+    .motion { position: fixed; right: 18px; bottom: 15px; border: 0; padding: 9px; background: transparent; color: #380306; font: 11px Helvetica, Arial, sans-serif; cursor: pointer; }
+    .motion:hover { color: #000; }
+    .motion:focus-visible { outline: 1px solid #000; outline-offset: 2px; }
+    canvas { touch-action: none; }
+    [hidden] { display: none !important; }
+    .tilt { position: fixed; left: 18px; bottom: 15px; border: 0; background: transparent; padding: 9px; font: 11px Helvetica, Arial, sans-serif; color: #380306; cursor: pointer; }
+    .tune { position: fixed; top: 12px; right: 12px; width: min(280px,calc(100vw - 24px)); max-height: calc(100svh - 70px); overflow: auto; padding: 18px; background: #ef1017; border: 1px solid #180000; font-size: 12px; }
+    .tune label { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-top: 16px; }
+    .tune input { grid-column: 1 / -1; width: 100%; accent-color: #180000; }
+    .tune p { margin-top: 16px; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="sphere" aria-label="Animated red glass sphere">
+      <article class="invitation">
+        <h1>maria turns 30</h1>
+        <div><p class="theme">THEME OF THE NIGHT</p><h2>beautifully bizarre</h2></div>
+        <p class="date">sat, dec 05 · 19:00</p>
+        <p class="venue">NOMER</p>
+      </article>
+      <canvas aria-hidden="true"></canvas>
+    </div>
+  </main>
+  <button class="motion" type="button" aria-pressed="false">pause animation</button>
+  <button class="tilt" type="button" hidden>enable tilt</button>
+  <aside class="tune" aria-label="Настройки линзы" hidden><strong>Линза</strong></aside>
+  <script>
+    (() => {
+      'use strict';
+      // R = 1 in optical coordinates; radius controls its size on the screen.
+      const params = window.lensParams = {
+        refraction: 1.25,
+        edgeDistortion: 1,
+        magnification: 1.9,
+        radius: .88,
+        softness: .008,
+        anisotropy: .025
+      };
+      const canvas = document.querySelector('canvas');
+      const button = document.querySelector('.motion');
+      const tiltButton = document.querySelector('.tilt');
+      const gl = canvas.getContext('webgl', { alpha: false, antialias: false });
+      if (!gl) { canvas.remove(); button.remove(); tiltButton.remove(); return; }
+      const vertex = `
+        attribute vec2 position;
+        varying vec2 uv;
+        void main() { uv = position; gl_Position = vec4(position,0.,1.); }
+      `;
+      const fragment = `
+        precision highp float;
+        varying vec2 uv;
+        uniform sampler2D lettering;
+        uniform vec2 view;
+        uniform float ior, distortion, magnification, radius, softness, anisotropy, resolution;
+        const vec3 red = vec3(239.,16.,23.)/255.;
+        // One ray, two sphere intersections, two applications of Snell's law.
+        bool trace(vec3 origin, vec3 ray, float n, float D, out vec2 hit) {
+          float b = dot(origin,ray);
+          float discriminant = b*b-dot(origin,origin)+1.;
+          if (discriminant <= 0.) return false;
+          vec3 entry = origin+ray*(-b-sqrt(discriminant));
+          vec3 inside = refract(ray,normalize(entry),1./n);
+          if (dot(inside,inside) < .5) return false;
+          float distanceInside = -2.*dot(entry,inside);
+          vec3 exitPoint = entry+inside*distanceInside;
+          // At the second interface the normal must face the incident medium.
+          vec3 outgoing = refract(inside,-normalize(exitPoint),n);
+          if (outgoing.z >= -.00001) return false;
+          float t = (-D-exitPoint.z)/outgoing.z;
+          if (t < 0.) return false;
+          hit = (exitPoint+t*outgoing).xy;
+          return true;
+        }
+        vec3 sheet(vec2 point) {
+          vec2 st = point*.5+.5;
+          // CLAMP_TO_EDGE alone would smear the border: explicitly bound the sheet.
+          vec3 value = texture2D(lettering,clamp(st,0.,1.)).rgb;
+          if (st.x < 0. || st.x > 1. || st.y < 0. || st.y > 1.) return red;
+          return value;
+        }
+        vec3 channelRay(vec3 origin,vec3 ray,vec2 p,float n,float D) {
+          vec2 hit;
+          if (!trace(origin,ray,n,D,hit)) return red;
+          vec2 ideal = p/magnification + D*ray.xy/(-ray.z);
+          // At distortion=1 and anisotropy=0 this is the exact spherical ray map.
+          float directional = 1.+anisotropy*(p.x*p.x-p.y*p.y)/(1.+dot(p,p));
+          hit = ideal+(hit-ideal)*distortion*directional;
+          // Compensate the paraxial enlargement; keep the original central type size.
+          return sheet(hit*magnification*1.28);
+        }
+        void main() {
+          vec2 p = (uv-view*.06*radius)/radius;
+          vec3 ray = normalize(vec3(view*.12,-1.));
+          vec3 origin = vec3(p,0.)-ray*3.;
+          float b = dot(origin,ray);
+          float discriminant = b*b-dot(origin,origin)+1.;
+          if (discriminant <= 0.) { gl_FragColor=vec4(red,1.); return; }
+          // Ball-lens effective focal length from its centre: f=nR/(2(n-1)).
+          // Paraxial map is h_sheet=(1-D/f)*h_pixel, hence D=f*(1-1/M).
+          float focal = ior/(2.*(ior-1.));
+          float D = focal*(1.-1./magnification);
+          vec3 r = channelRay(origin,ray,p,ior*.995,D);
+          vec3 g = channelRay(origin,ray,p,ior,D);
+          vec3 bl = channelRay(origin,ray,p,ior*1.005,D);
+          vec3 color = vec3(r.r,g.g,bl.b);
+          float radial = sqrt(max(0.,1.-discriminant));
+          color *= 1.-.10*pow(radial,6.);
+          float feather = max(softness,2./(resolution*radius));
+          float coverage = 1.-smoothstep(1.-feather,1.,radial);
+          gl_FragColor = vec4(mix(red,color,coverage),1.);
+        }
+      `;
+      function compile(type,source) {
+        const shader=gl.createShader(type);
+        gl.shaderSource(shader,source); gl.compileShader(shader);
+        if (!gl.getShaderParameter(shader,gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(shader));
+        return shader;
+      }
+      try {
+        const program=gl.createProgram();
+        gl.attachShader(program,compile(gl.VERTEX_SHADER,vertex));
+        gl.attachShader(program,compile(gl.FRAGMENT_SHADER,fragment));
+        gl.linkProgram(program);
+        if (!gl.getProgramParameter(program,gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
+        gl.useProgram(program);
+        gl.bindBuffer(gl.ARRAY_BUFFER,gl.createBuffer());
+        gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]),gl.STATIC_DRAW);
+        const position=gl.getAttribLocation(program,'position');
+        gl.enableVertexAttribArray(position); gl.vertexAttribPointer(position,2,gl.FLOAT,false,0,0);
+        const textureCanvas=document.createElement('canvas');
+        textureCanvas.width=textureCanvas.height=1024;
+        const ctx=textureCanvas.getContext('2d');
+        ctx.fillStyle='#ef1017'; ctx.fillRect(0,0,1024,1024);
+        ctx.fillStyle='#000'; ctx.textAlign='center'; ctx.textBaseline='middle';
+        function line(text,y,size,weight=700) {
+          ctx.font=`${weight} ${size}px Helvetica, Arial, sans-serif`;
+          ctx.fillText(text,512,y);
+        }
+        line('maria turns 30',325,73);
+        line('THEME OF THE NIGHT',434,25.5);
+        line('beautifully bizarre',493,57);
+        line('sat, dec 05 · 19:00',609,42.5);
+        line('NOMER',692.5,52);
+        gl.bindTexture(gl.TEXTURE_2D,gl.createTexture());
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);
+        gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,textureCanvas);
+        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR_MIPMAP_LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+        gl.generateMipmap(gl.TEXTURE_2D);
+        gl.uniform1i(gl.getUniformLocation(program,'lettering'),0);
+        const uniforms=Object.fromEntries(['view','ior','distortion','magnification','radius','softness','anisotropy','resolution'].map(k=>[k,gl.getUniformLocation(program,k)]));
+        const reduced=matchMedia('(prefers-reduced-motion: reduce)');
+        let paused=false,last=0,raf=0,idleTime=0,lastInput=performance.now();
+        let target=[0,0],stage1=[0,0],stage2=[0,0];
+        function draw() {
+          // Keep the physical sheet beyond the back surface even with custom values.
+          params.refraction=Math.max(1.05,Math.min(1.5,params.refraction));
+          params.magnification=Math.max(params.refraction/(2-params.refraction)+.025,params.magnification);
+          gl.uniform2f(uniforms.view,...stage2);
+          for (const [name,key] of [['ior','refraction'],['distortion','edgeDistortion'],['magnification','magnification'],['radius','radius'],['softness','softness'],['anisotropy','anisotropy']]) gl.uniform1f(uniforms[name],params[key]);
+          gl.drawArrays(gl.TRIANGLES,0,6);
+        }
+        function resize() {
+          canvas.width=canvas.height=Math.round(canvas.clientWidth*Math.min(devicePixelRatio||1,2));
+          gl.viewport(0,0,canvas.width,canvas.height);
+          gl.uniform1f(uniforms.resolution,canvas.width); draw();
+        }
+        function frame(now) {
+          raf=0;
+          if (document.hidden||paused) { last=0; return; }
+          const dt=last ? (now-last)/1000 : 0;
+          last=now;
+          if (reduced.matches) { stage1=[0,0]; stage2=[0,0]; draw(); last=0; return; }
+          if (now-lastInput>2500) {
+            idleTime+=dt;
+            target=[.32*Math.sin(idleTime*.29),.23*Math.sin(idleTime*.58)];
+          }
+          // Exact solution of two equal cascaded first-order low-pass stages.
+          // Unlike two per-frame lerps, this includes the intra-frame stage-1 motion.
+          const tau=.16,e=Math.exp(-dt/tau);
+          for (let i=0;i<2;i++) {
+            const a=stage1[i]-target[i],b=stage2[i]-target[i];
+            stage1[i]=target[i]+a*e;
+            stage2[i]=target[i]+(b+a*dt/tau)*e;
+          }
+          draw(); raf=requestAnimationFrame(frame);
+        }
+        function wake() { if (!raf&&!document.hidden&&!paused) raf=requestAnimationFrame(frame); }
+        function input(x,y) {
+          if (paused||reduced.matches) return;
+          target=[Math.max(-1,Math.min(1,x)),Math.max(-1,Math.min(1,y))];
+          lastInput=performance.now(); idleTime=0; wake();
+        }
+        function pointer(event) {
+          if (event.target.closest('button, .tune')) return;
+          const rect=canvas.getBoundingClientRect();
+          input((event.clientX-rect.left)/rect.width*2-1,1-(event.clientY-rect.top)/rect.height*2);
+        }
+        window.addEventListener('pointermove',pointer,{passive:true});
+        window.addEventListener('pointerdown',pointer,{passive:true});
+        // Device sensors require a user gesture on iOS. No permission is requested on load.
+        let orientationOrigin=null;
+        function orientation(event) {
+          if (event.beta==null||event.gamma==null) return;
+          if (!orientationOrigin) orientationOrigin=[event.gamma,event.beta];
+          const x=(event.gamma-orientationOrigin[0])/25;
+          const y=(event.beta-orientationOrigin[1])/25;
+          const angle=(screen.orientation?.angle ?? window.orientation ?? 0)*Math.PI/180;
+          input(x*Math.cos(angle)+y*Math.sin(angle),x*Math.sin(angle)-y*Math.cos(angle));
+        }
+        if ('DeviceOrientationEvent' in window && matchMedia('(pointer: coarse)').matches) tiltButton.hidden=false;
+        tiltButton.addEventListener('click',async()=>{
+          try {
+            if (typeof DeviceOrientationEvent.requestPermission==='function') {
+              if (await DeviceOrientationEvent.requestPermission()!=='granted') { tiltButton.textContent='tilt permission denied'; return; }
+            }
+            orientationOrigin=null;
+            window.addEventListener('deviceorientation',orientation,{passive:true});
+            tiltButton.textContent='tilt enabled'; tiltButton.disabled=true;
+          } catch { tiltButton.textContent='tilt needs HTTPS'; }
+        });
+        button.addEventListener('click',()=>{
+          paused=!paused; last=0;
+          button.textContent=paused?'play animation':'pause animation';
+          button.setAttribute('aria-pressed',String(paused)); wake();
+        });
+        reduced.addEventListener('change',()=>{ last=0; stage1=[0,0]; stage2=[0,0]; target=[0,0]; draw(); wake(); });
+        document.addEventListener('visibilitychange',()=>{last=0;wake();});
+        if (new URLSearchParams(location.search).has('tune')) {
+          const panel=document.querySelector('.tune'); panel.hidden=false;
+          const specs=[['refraction','Преломление',1.1,1.4,.001],['edgeDistortion','Искажение краёв',0,2,.01],['magnification','Увеличение',1.7,3.5,.01],['radius','Радиус',.5,.93,.01],['softness','Мягкость границы',.001,.05,.001],['anisotropy','Неравномерность',0,.15,.001]];
+          for (const [key,title,min,max,step] of specs) {
+            const label=document.createElement('label');
+            const heading=document.createElement('span'); heading.textContent=title;
+            const output=document.createElement('output'); output.textContent=params[key];
+            const slider=document.createElement('input'); slider.type='range'; slider.min=min; slider.max=max; slider.step=step; slider.value=params[key];
+            slider.addEventListener('input',()=>{params[key]=Number(slider.value);draw();refresh();});
+            label.append(heading,output,slider); panel.append(label);
+            slider.dataset.key=key;
+          }
+          const note=document.createElement('p'); panel.append(note);
+          function refresh() {
+            for (const slider of panel.querySelectorAll('input')) {
+              slider.value=params[slider.dataset.key]; slider.previousElementSibling.textContent=Number(slider.value).toFixed(3);
+            }
+            const f=params.refraction/(2*(params.refraction-1));
+            note.textContent=`D = ${(f*(1-1/params.magnification)).toFixed(3)} R · f = ${f.toFixed(3)} R`;
+          }
+          refresh();
+        }
+        canvas.addEventListener('webglcontextlost',event=>{
+          event.preventDefault();paused=true;cancelAnimationFrame(raf);
+          document.querySelector('.sphere').classList.remove('rendered');canvas.hidden=true;
+        });
+        new ResizeObserver(resize).observe(canvas);
+        document.querySelector('.sphere').classList.add('rendered'); resize(); wake();
+      } catch(error) {
+        console.error('Lens rendering unavailable:',error);
+        document.querySelector('.sphere').classList.remove('rendered');
+        canvas.remove();button.remove();tiltButton.remove();
+      }
+    })();
+  </script>
+</body>
+</html>
